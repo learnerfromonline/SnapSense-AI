@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:curved_navigation_bar/curved_navigation_bar.dart';
 import 'package:genai/screens/chat.dart';
+import 'package:genai/screens/multi_images.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:genai/main.dart';
 
@@ -16,6 +17,7 @@ class _NavScreenState extends State<NavScreen> {
   final List<Widget> _screens = [
     ImagePromptScreen(),
     Chatscreen(),
+    MultiImagePromptScreen(),
     
   ];
 
@@ -36,6 +38,7 @@ class _NavScreenState extends State<NavScreen> {
         items: const <Widget>[
           Icon(Icons.image, size: 30, color: Colors.white),
           Icon(Icons.chat, size: 30, color: Colors.white),
+          Icon(Icons.image_search, size: 30, color: Colors.white),
           
         ],
         color:Colors.black, // Soft blue

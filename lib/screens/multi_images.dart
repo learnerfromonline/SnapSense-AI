@@ -1,4 +1,3 @@
-
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
@@ -6,71 +5,25 @@ import 'package:genai/model/data.dart';
 import 'package:genai/screens/navigation.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter/services.dart'; // for Clipboard
 import 'package:photo_view/photo_view.dart';
 import 'package:photo_view/photo_view_gallery.dart';
 import 'package:shimmer/shimmer.dart';
 
-void main() async {
-  runApp(MyApp());
-}
-
-class MyApp extends StatelessWidget {
+class MultiImagePromptScreen extends StatefulWidget {
   @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'SnapSense AI',
-      theme: ThemeData(
-        primarySwatch: Colors.indigo,
-        hintColor: Colors.grey[600],
-        elevatedButtonTheme: ElevatedButtonThemeData(
-          style: ElevatedButton.styleFrom(
-            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
-            ),
-            alignment: Alignment.center,
-          ),
-        ),
-        cardTheme: CardTheme(
-          elevation: 2,
-          margin: EdgeInsets.symmetric(vertical: 8),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
-          ),
-        ),
-        inputDecorationTheme: InputDecorationTheme(
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-          focusedBorder: OutlineInputBorder(
-            borderSide: BorderSide(color: Colors.indigoAccent),
-            borderRadius: BorderRadius.circular(8),
-          ),
-        ),
-        colorScheme:
-            ColorScheme.fromSwatch(primarySwatch: Colors.indigo).copyWith(
-          secondary: Colors.blueAccent,
-        ),
-      ),
-      home: NavScreen(),
-    );
-  }
+  State<MultiImagePromptScreen> createState() => _MultiImagePromptScreenState();
 }
 
-class ImagePromptScreen extends StatefulWidget {
-  @override
-  State<ImagePromptScreen> createState() => _ImagePromptScreenState();
-}
-
-class _ImagePromptScreenState extends State<ImagePromptScreen>
+class _MultiImagePromptScreenState extends State<MultiImagePromptScreen>
     with SingleTickerProviderStateMixin {
   final ImagePicker _picker = ImagePicker();
-  Uint8List? _imageBytes;
+  List<Uint8List> _imageBytesList = [];
+  List<String> _imageNames = [];
   String _prompt = '';
   String? _responseText;
   bool _loading = false;
-  String _imageName = '';
+  bool _isMultipleImages = false; // Toggle for single/multiple images
   AnimationController? _controller;
   Animation<double>? _fadeAnimation;
   Animation<Offset>? _slideAnimation;
@@ -101,33 +54,74 @@ class _ImagePromptScreenState extends State<ImagePromptScreen>
   }
 
   Future<void> _pickImage(ImageSource source) async {
-    final XFile? image = await _picker.pickImage(source: source);
-    if (image != null) {
-      final bytes = await image.readAsBytes();
-      setState(() {
-        _imageBytes = bytes;
-        _imageName = image.name;
-        _controller?.reset();
-        _controller?.forward();
-      });
+    if (_isMultipleImages) {
+      List<Uint8List> bytesList = List.from(_imageBytesList);
+      List<String> namesList = List.from(_imageNames);
+
+      if (source == ImageSource.gallery) {
+        final List<XFile> images = await _picker.pickMultiImage();
+        if (images.isNotEmpty) {
+          for (var image in images) {
+            final bytes = await image.readAsBytes();
+            bytesList.add(bytes);
+            namesList.add(image.name);
+          }
+        }
+      } else {
+        // Camera source
+
+        final XFile? image =
+            await _picker.pickImage(source: ImageSource.camera);
+        if (image != null) {
+          final bytes = await image.readAsBytes();
+          bytesList.add(bytes);
+          namesList.add(image.name);
+        }
+      }
+
+      if (bytesList.isNotEmpty) {
+        setState(() {
+          _imageBytesList = bytesList;
+          _imageNames = namesList;
+          _controller?.reset();
+          _controller?.forward();
+        });
+      }
+    } else {
+      final XFile? image = await _picker.pickImage(source: source);
+      if (image != null) {
+        final bytes = await image.readAsBytes();
+        setState(() {
+          _imageBytesList = [bytes];
+          _imageNames = [image.name];
+          _controller?.reset();
+          _controller?.forward();
+        });
+      }
     }
   }
 
   Future<void> _sendToGemini() async {
-    if (_imageBytes == null || _prompt.isEmpty) return;
+    if (_imageBytesList.isEmpty || _prompt.isEmpty) return;
 
     setState(() {
       _loading = true;
     });
 
-    final String apiKey =
-        api_key; // Replace with your actual API key or use dotenv
+    String apiKey = api_key; // Replace with your actual API key
     String model = 'gemini-2.0-flash-lite';
     final Uri uri = Uri.parse(
         'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey');
 
-    final base64Image = base64Encode(_imageBytes!);
-    final String mimeType = 'image/jpeg';
+    List<Map<String, dynamic>> imageParts = _imageBytesList.map((bytes) {
+      final base64Image = base64Encode(bytes);
+      return {
+        "inline_data": {
+          "mime_type": "image/jpeg",
+          "data": base64Image,
+        }
+      };
+    }).toList();
 
     final Map<String, dynamic> requestPayload = {
       "contents": [
@@ -135,12 +129,7 @@ class _ImagePromptScreenState extends State<ImagePromptScreen>
           "role": "user",
           "parts": [
             {"text": _prompt},
-            {
-              "inline_data": {
-                "mime_type": mimeType,
-                "data": base64Image,
-              }
-            }
+            ...imageParts,
           ]
         }
       ]
@@ -216,7 +205,6 @@ class _ImagePromptScreenState extends State<ImagePromptScreen>
       ),
       body: Stack(
         children: [
-          // Background with subtle animation
           AnimatedContainer(
             duration: Duration(seconds: 10),
             decoration: BoxDecoration(
@@ -235,7 +223,7 @@ class _ImagePromptScreenState extends State<ImagePromptScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                if (_imageBytes != null &&
+                if (_imageBytesList.isNotEmpty &&
                     _fadeAnimation != null &&
                     _slideAnimation != null)
                   FadeTransition(
@@ -243,54 +231,81 @@ class _ImagePromptScreenState extends State<ImagePromptScreen>
                     child: SlideTransition(
                       position: _slideAnimation!,
                       child: Container(
-                        decoration: BoxDecoration(
-                          border:
-                              Border.all(color: Color(0xFF00FFFF), width: 2),
-                          borderRadius: BorderRadius.circular(12),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Color(0xFF00FFFF).withOpacity(0.3),
-                              blurRadius: 10,
-                              spreadRadius: 2,
-                            ),
-                          ],
-                        ),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(10),
-                          child: InteractiveViewer(
-                            panEnabled: true,
-                            scaleEnabled: true,
-                            minScale: 0.5,
-                            maxScale: 4.0,
-                            child: GestureDetector(
-                              onTap: () {
-                                showDialog(
-                                  context: context,
-                                  builder: (context) => Dialog(
-                                    elevation: 3,
-                                    backgroundColor: Colors.black,
-                                    insetPadding: EdgeInsets.zero,
-                                    child: InteractiveViewer(
-                                      panEnabled: true,
-                                      scaleEnabled: true,
-                                      minScale: 0.5,
-                                      maxScale: 4.0,
+                        height: 250,
+                        child: ListView.builder(
+                          scrollDirection: Axis.horizontal,
+                          itemCount: _imageBytesList.length,
+                          itemBuilder: (context, index) {
+                            return Padding(
+                              padding: EdgeInsets.only(right: 8),
+                              child: Container(
+                                width: 200,
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                      color: Color(0xFF00FFFF), width: 2),
+                                  borderRadius: BorderRadius.circular(12),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Color(0xFF00FFFF).withOpacity(0.3),
+                                      blurRadius: 10,
+                                      spreadRadius: 2,
+                                    ),
+                                  ],
+                                ),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: InteractiveViewer(
+                                    panEnabled: true,
+                                    scaleEnabled: true,
+                                    minScale: 0.5,
+                                    maxScale: 4.0,
+                                    child: GestureDetector(
+                                      onTap: () {
+                                        showDialog(
+                                          context: context,
+                                          builder: (context) => Dialog(
+                                            elevation: 3,
+                                            backgroundColor: Colors.black,
+                                            insetPadding: EdgeInsets.zero,
+                                            child: PhotoViewGallery.builder(
+                                              itemCount: _imageBytesList.length,
+                                              builder: (context, galleryIndex) {
+                                                return PhotoViewGalleryPageOptions(
+                                                  imageProvider: MemoryImage(
+                                                      _imageBytesList[
+                                                          galleryIndex]),
+                                                  minScale:
+                                                      PhotoViewComputedScale
+                                                              .contained *
+                                                          0.5,
+                                                  maxScale:
+                                                      PhotoViewComputedScale
+                                                              .covered *
+                                                          4.0,
+                                                );
+                                              },
+                                              scrollPhysics:
+                                                  BouncingScrollPhysics(),
+                                              backgroundDecoration:
+                                                  BoxDecoration(
+                                                color: const Color.fromARGB(118, 0, 0, 0),
+                                              ),
+                                              pageController: PageController(
+                                                  initialPage: index),
+                                            ),
+                                          ),
+                                        );
+                                      },
                                       child: Image.memory(
-                                        _imageBytes!,
-                                        
-                                        fit: BoxFit.contain,
+                                        _imageBytesList[index],
+                                        fit: BoxFit.fill,
                                       ),
                                     ),
                                   ),
-                                );
-                              },
-                              child: Image.memory(
-                                _imageBytes!,
-                                height: 250,
-                                fit: BoxFit.fill,
+                                ),
                               ),
-                            ),
-                          ),
+                            );
+                          },
                         ),
                       ),
                     ),
@@ -304,20 +319,23 @@ class _ImagePromptScreenState extends State<ImagePromptScreen>
                       child: Container(
                         decoration: BoxDecoration(
                           gradient: LinearGradient(
-                            colors: [Colors.indigo,Color(0xFF1A1A3D), Color(0xFF2A2A5D),],
+                            colors: [
+                              Colors.indigo,
+                              Color(0xFF1A1A3D),
+                              Color(0xFF2A2A5D),
+                            ],
                             begin: Alignment.topLeft,
                             end: Alignment.bottomRight,
                           ),
                           borderRadius: BorderRadius.circular(12),
-                          // border:
-                              // Border.all(color: Color(0xFFFF007A), width: 1,),
                         ),
-                        child: _imageBytes != null
+                        child: _imageBytesList.isNotEmpty
                             ? TextField(
                                 autocorrect: true,
                                 style: TextStyle(color: Colors.white),
                                 decoration: InputDecoration(
-                                  labelText: 'Ask Me About Image',
+                                  labelText:
+                                      'Ask Me About Image${_isMultipleImages ? "s" : ""}',
                                   labelStyle: TextStyle(
                                     color: Color(0xFF00FFFF),
                                     fontFamily: 'Orbitron',
@@ -332,11 +350,52 @@ class _ImagePromptScreenState extends State<ImagePromptScreen>
                                 ),
                                 onChanged: (val) => _prompt = val,
                               )
-                            : SizedBox.shrink(),
+                            : SizedBox(),
                       ),
                     ),
                   ),
-                SizedBox(height: 24),
+                SizedBox(height: 16),
+                if (_fadeAnimation != null && _slideAnimation != null)
+                  FadeTransition(
+                    opacity: _fadeAnimation!,
+                    child: SlideTransition(
+                      position: _slideAnimation!,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.start,
+                        children: [
+                          Checkbox(
+                            value: _isMultipleImages,
+                            onChanged: (value) {
+                              setState(() {
+                                _isMultipleImages = value ?? false;
+                                _imageBytesList = [];
+                                _imageNames = [];
+                              });
+                            },
+                            activeColor: Color(0xFF00FFFF),
+                            checkColor: Colors.black,
+                            side: BorderSide(
+                              color: Color(0xFFFF007A),
+                              width: 2,
+                            ),
+                          ),
+                          // Spacer(),
+                          Container(
+                            margin: EdgeInsets.only(right: 10, left: 12),
+                            child: Text(
+                              'Enable Multiple Images',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontFamily: 'Orbitron',
+                                fontSize: 16,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                SizedBox(height: 16),
                 if (_fadeAnimation != null && _slideAnimation != null)
                   FadeTransition(
                     opacity: _fadeAnimation!,
@@ -347,7 +406,7 @@ class _ImagePromptScreenState extends State<ImagePromptScreen>
                         children: [
                           _buildCyberButton(
                             icon: Icons.photo,
-                            label: 'Gallery',
+                            label: _isMultipleImages ? 'Multi Pick' : 'Gallery',
                             onPressed: () => _pickImage(ImageSource.gallery),
                             color: Color(0xFF00FFFF),
                           ),
